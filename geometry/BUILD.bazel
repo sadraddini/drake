@@ -513,6 +513,20 @@ drake_cc_binary(
     ],
 )
 
+drake_cc_binary(
+    name = "meshcat_manual_html_test",
+    testonly = True,
+    srcs = ["test/meshcat_manual_html_test.cc"],
+    data = [
+        ":html_files",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":meshcat",
+        ":meshcat_visualizer",
+    ],
+)
+
 drake_py_binary(
     name = "meshcat_websocket_client",
     testonly = True,
@@ -693,6 +707,14 @@ filegroup(
         "test/env_256_cornell_box.png",
         "test/env_256_six_color_room.hdr",
         "test/env_256_six_color_room.png",
+    ],
+)
+
+filegroup(
+    name = "html_files",
+    testonly = 1,
+    srcs = [
+        "test/minimal_example.html",
     ],
 )
 
