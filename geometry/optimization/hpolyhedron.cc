@@ -23,6 +23,7 @@
 #include "drake/math/rotation_matrix.h"
 #include "drake/solvers/constraint.h"
 #include "drake/solvers/gurobi_solver.h"
+#include "drake/solvers/clarabel_solver.h"
 #include "drake/solvers/solve.h"
 
 namespace drake {
@@ -300,6 +301,10 @@ Hyperellipsoid HPolyhedron::MaximumVolumeInscribedEllipsoid() const {
     prog.AddLorentzConeConstraint(A_lorentz, b_lorentz, vars);
   }
   auto result = solvers::Solve(prog);
+  // solvers::ClarabelSolver solver;
+  // auto result = solver.Solve(prog);
+  // print what was the solver name
+  log()->info("MaximumVolumeInscribedEllipsoid Solver name: {}", result.get_solver_id().name());
   if (!result.is_success()) {
     throw std::runtime_error(fmt::format(
         "Solver {} failed to solve the maximum inscribed ellipse problem; it "

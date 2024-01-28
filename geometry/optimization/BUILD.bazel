@@ -579,4 +579,25 @@ drake_cc_googletest(
     ],
 )
 
+filegroup(
+    name = "faulty_hpolyhedron",
+    srcs = ["test/faulty_hpolyhedron.yaml"],
+    visibility = ["//visibility:public"],
+)
+
+drake_cc_googletest(
+    name = "fault",
+    testonly = True,
+    srcs = ["test/faulty_hpolyhedron.cc"],
+    data = [
+        ":faulty_hpolyhedron",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":convex_set",
+        ":test_utilities",
+        "//common/yaml",
+    ],
+)
+
 add_lint_tests()
