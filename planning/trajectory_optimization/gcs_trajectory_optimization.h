@@ -502,14 +502,7 @@ class GcsTrajectoryOptimization final {
   /** Returns the sequence of regions from a mathematical program result that is typically obtained from SolvePath(). 
  
  @param include_ends determines whether the start region (belonging to source) and end region (belonging to target) are included in the returned sequence. */
-  geometry::optimization::ConvexSets GetRegionsPath(const Subgraph& source, const Subgraph& target, const solvers::MathematicalProgramResult& result, const double tolerance = 1e-3, bool include_ends = true) const;
-
-  /** Formulates and solves the mixed-integer convex formulation of the*/
-  std::pair<trajectories::CompositeTrajectory<double>,
-            solvers::MathematicalProgramResult>
-  SolvePathViaConvexRestriction(
-      const ConvexSets& convex_set_sequence,
-      const geometry::optimization::GraphOfConvexSetsOptions& options = {});  
+  geometry::optimization::ConvexSets GetRegionsPath(const Subgraph& source, const Subgraph& target, const solvers::MathematicalProgramResult& result, const double tolerance = 1e-3, bool include_ends = true) const; 
 
 
   /** Provide a heuristic estimate of the complexity of the underlying
@@ -536,6 +529,16 @@ class GcsTrajectoryOptimization final {
   */
   static trajectories::CompositeTrajectory<double> NormalizeSegmentTimes(
       const trajectories::CompositeTrajectory<double>& trajectory);
+
+  /** Formulates and solves the mixed-integer convex formulation of the*/
+  static trajectories::CompositeTrajectory<double> SolvePathViaConvexRestriction(
+      const geometry::optimization::ConvexSets& convex_set_sequence, const int order, 
+      std::vector< int >continuous_revolute_joints = std::vector< int >(),
+      const std::optional<int> continuity_order = std::nullopt,
+      const std::optional<double> time_cost = std::nullopt,
+      const std::optional<Eigen::MatrixXd> path_length_cost = std::nullopt,
+      const std::optional<std::pair<Eigen::VectorXd, Eigen::VectorXd>> velocity_bounds = std::nullopt,
+      const geometry::optimization::GraphOfConvexSetsOptions& options = {}); 
 
  private:
   const int num_positions_;

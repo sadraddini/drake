@@ -1104,6 +1104,115 @@ GcsTrajectoryOptimization::NormalizeSegmentTimes(
   return CompositeTrajectory<double>(normalized_bezier_curves);
 }
 
+trajectories::CompositeTrajectory<double> GcsTrajectoryOptimization::SolvePathViaConvexRestriction(
+      const geometry::optimization::ConvexSets& convex_set_sequence, const int order, 
+      std::vector< int >continuous_revolute_joints, 
+      const std::optional<int> continuity_order,
+      const std::optional<double> time_cost,
+      const std::optional<Eigen::MatrixXd> path_length_cost,
+      const std::optional<std::pair<Eigen::VectorXd, Eigen::VectorXd>> velocity_bounds,
+      const geometry::optimization::GraphOfConvexSetsOptions& options){
+        DRAKE_DEMAND(convex_set_sequence.size() > 0);
+        const int dim = convex_set_sequence[0]->ambient_dimension();
+        for (const auto& convex_set : convex_set_sequence){
+          DRAKE_DEMAND(convex_set->ambient_dimension() == dim);
+        }  
+      auto gcs = GcsTrajectoryOptimization(dim, continuous_revolute_joints);
+      const int start_order = convex_set_sequence.front()->MaybeGetPoint() ? 0 : order;
+      const int end_order = convex_set_sequence.back()->MaybeGetPoint() ? 0 : order;
+      auto& source = gcs.AddRegions({convex_set_sequence.front()}, start_order);
+      DRAKE_DEMAND(gcs.graph_of_convex_sets().Vertices().size() == 1);
+      const auto* source_vertex = gcs.graph_of_convex_sets().Vertices().front();
+      auto& target = gcs.AddRegions({convex_set_sequence.back()}, end_order);
+      DRAKE_DEMAND(gcs.graph_of_convex_sets().Vertices().size() == 2);
+      const auto* target_vertex = gcs.graph_of_convex_sets().Vertices().back();
+      if (convex_set_sequence.size()>2){
+        ConvexSets convex_set_sequence_without_endpoints(convex_set_sequence.begin() + 1, convex_set_sequence.end() - 1);
+        auto& main = gcs.AddRegions(convex_set_sequence_without_endpoints, order);
+        gcs.AddEdges(source, main);
+        gcs.AddEdges(main, target);
+      }
+      else{
+        gcs.AddEdges(source, target);
+      }
+      if (continuity_order.has_value()){
+        gcs.AddPathContinuityConstraints(continuity_order.value());
+      }
+      if (time_cost.has_value()){
+        gcs.AddTimeCost(time_cost.value());
+      }
+      if (path_length_cost.has_value()){
+        gcs.AddPathLengthCost(path_length_cost.value());
+      }
+      if (velocity_bounds.has_value()){
+        gcs.AddVelocityBounds(velocity_bounds.value().first, velocity_bounds.value().second);
+      }
+      // get the edge paths from source_vertex to target_vertex.
+      std::vector<const Edge*> edge_path;
+      std::vector<const Vertex*> internal_vertex_path;
+      const Vertex* current_vertex = source_vertex;
+      while (current_vertex != target_vertex){
+        DRAKE_DEMAND(current_vertex->outgoing_edges().size() == 1);
+        const auto* edge = current_vertex->outgoing_edges().front();
+        edge_path.push_back(edge);
+        current_vertex = &(edge->v());
+        if (current_vertex != target_vertex){
+          internal_vertex_path.push_back(current_vertex);
+        }
+      }
+      DRAKE_DEMAND(current_vertex == target_vertex);
+      DRAKE_DEMAND(edge_path.size() == convex_set_sequence.size() - 1);
+      DRAKE_DEMAND(internal_vertex_path.size() == convex_set_sequence.size() - 2);
+      const auto result = gcs.graph_of_convex_sets().SolveConvexRestriction(edge_path, options);
+      if (!result.is_success()){
+        throw std::runtime_error("Could not solve SolvePathViaConvexRestriction. Check for infeasibility.");
+      }
+      // lets' extract the path from the result
+      std::vector<copyable_unique_ptr<Trajectory<double>>> bezier_curves;
+      // first vertex should be the source
+      const Vertex* first_path_vertex = &(edge_path.front()->u());
+      DRAKE_DEMAND(first_path_vertex == source_vertex);
+      double start_time = 0;
+      if (source.order() > 0){
+        int num_control_points = source.order() + 1;
+        Eigen::VectorXd solution = result.GetSolution(first_path_vertex->x());
+        const MatrixX<double> control_points =
+            Eigen::Map<MatrixX<double>>(solution.data(),
+                                        dim, num_control_points);
+        double h = solution.tail<1>().value();
+        bezier_curves.emplace_back(std::make_unique<BezierCurve<double>>(
+          start_time, start_time + h, control_points));
+        start_time += h;
+      }
+      // now extract the internal path
+      for (const Vertex* v : internal_vertex_path) {
+        int num_control_points = order + 1;
+        Eigen::VectorXd solution = result.GetSolution(v->x());
+        const MatrixX<double> control_points =
+            Eigen::Map<MatrixX<double>>(solution.data(),
+                                        dim, num_control_points);
+        double h = solution.tail<1>().value();
+        bezier_curves.emplace_back(std::make_unique<BezierCurve<double>>(
+          start_time, start_time + h, control_points));
+        start_time += h;
+      }
+      // now extract the last vertex
+      const Vertex* last_path_vertex = &(edge_path.back()->v());
+      DRAKE_DEMAND(last_path_vertex == target_vertex);
+      if (target.order() > 0){
+        int num_control_points = target.order() + 1;
+           Eigen::VectorXd solution = result.GetSolution(last_path_vertex->x());
+        const MatrixX<double> control_points =
+            Eigen::Map<MatrixX<double>>(solution.data(),
+                                        dim, num_control_points);
+        double h = solution.tail<1>().value();
+        bezier_curves.emplace_back(std::make_unique<BezierCurve<double>>(
+          start_time, start_time + h, control_points));
+        start_time += h;
+      }
+      return CompositeTrajectory<double>(bezier_curves);
+}
+
 std::vector<int> GetContinuousRevoluteJointIndices(
     const multibody::MultibodyPlant<double>& plant) {
   std::vector<int> indices;
