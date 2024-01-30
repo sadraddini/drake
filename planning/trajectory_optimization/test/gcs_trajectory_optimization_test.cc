@@ -80,6 +80,14 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, Basic) {
   EXPECT_EQ(traj.cols(), 1);
   EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start, 1e-6));
   EXPECT_TRUE(CompareMatrices(traj.value(traj.end_time()), goal, 1e-6));
+  // recover the regions visited by the trajectory.
+  auto regions_traj = gcs.GetRegionsPath(source, target, result);
+  EXPECT_EQ(regions_traj.size(), 3);
+  ASSERT_TRUE(regions_traj.at(0)->MaybeGetPoint().has_value());
+  EXPECT_TRUE(CompareMatrices(regions_traj.front()->MaybeGetPoint().value(), start, 1e-6));
+  EXPECT_NO_THROW(dynamic_cast<const HPolyhedron*>(regions_traj.at(1).get()));
+  ASSERT_TRUE(regions_traj.at(2)->MaybeGetPoint().has_value());
+  EXPECT_TRUE(CompareMatrices(regions_traj.back()->MaybeGetPoint().value(), goal, 1e-6));
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, PathLengthCost) {

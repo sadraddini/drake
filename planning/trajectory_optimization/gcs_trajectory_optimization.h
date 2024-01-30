@@ -499,6 +499,19 @@ class GcsTrajectoryOptimization final {
       const Subgraph& source, const Subgraph& target,
       const geometry::optimization::GraphOfConvexSetsOptions& options = {});
 
+  /** Returns the sequence of regions from a mathematical program result that is typically obtained from SolvePath(). 
+ 
+ @param include_ends determines whether the start region (belonging to source) and end region (belonging to target) are included in the returned sequence. */
+  geometry::optimization::ConvexSets GetRegionsPath(const Subgraph& source, const Subgraph& target, const solvers::MathematicalProgramResult& result, const double tolerance = 1e-3, bool include_ends = true) const;
+
+  /** Formulates and solves the mixed-integer convex formulation of the*/
+  std::pair<trajectories::CompositeTrajectory<double>,
+            solvers::MathematicalProgramResult>
+  SolvePathViaConvexRestriction(
+      const ConvexSets& convex_set_sequence,
+      const geometry::optimization::GraphOfConvexSetsOptions& options = {});  
+
+
   /** Provide a heuristic estimate of the complexity of the underlying
   GCS mathematical program, for regression testing purposes.
   Here we sum the total number of variable appearances in our costs and
@@ -538,8 +551,11 @@ class GcsTrajectoryOptimization final {
   // Store the subgraphs by reference.
   std::vector<std::unique_ptr<Subgraph>> subgraphs_;
   std::vector<std::unique_ptr<EdgesBetweenSubgraphs>> subgraph_edges_;
+  std::map<const Subgraph*, std::vector<geometry::optimization::GraphOfConvexSets::Vertex*>> subgraph_to_vertices_;
   std::map<const geometry::optimization::GraphOfConvexSets::Vertex*, Subgraph*>
       vertex_to_subgraph_;
+  std::map<const geometry::optimization::GraphOfConvexSets::Vertex*,
+           std::unique_ptr<geometry::optimization::ConvexSet>> vertex_to_region_;
   std::vector<double> global_time_costs_;
   std::vector<Eigen::MatrixXd> global_path_length_costs_;
   std::vector<std::pair<Eigen::VectorXd, Eigen::VectorXd>>

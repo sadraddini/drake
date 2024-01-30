@@ -117,11 +117,12 @@ Subgraph::Subgraph(
                       ConvexSets::value_type{*regions_[i]});
     // Add time scaling set.
     vertex_set.emplace_back(time_scaling_set);
-
     vertices_.emplace_back(traj_opt_.gcs_.AddVertex(
         CartesianProduct(vertex_set), fmt::format("{}: Region{}", name_, i)));
+    traj_opt->vertex_to_region_[vertices_.back()] = regions_[i]->Clone();
     traj_opt->vertex_to_subgraph_[vertices_.back()] = this;
   }
+  traj_opt->subgraph_to_vertices_[this] = vertices_;
 
   r_trajectory_ =
       BezierCurve<double>(0, 1, MatrixXd::Zero(num_positions(), order + 1));
@@ -969,6 +970,81 @@ GcsTrajectoryOptimization::SolvePath(
   }
 
   return {CompositeTrajectory<double>(bezier_curves), result};
+}
+
+geometry::optimization::ConvexSets GcsTrajectoryOptimization::GetRegionsPath(const Subgraph& source, const Subgraph& target, 
+const solvers::MathematicalProgramResult& result, const double tolerance, bool include_ends) const{
+  // let's find which vertex in the source got chosen.
+  Vertex* source_vertex = nullptr;
+  const auto& source_vertices {subgraph_to_vertices_.at(&source)};
+  if (source_vertices.size() == 1){
+    // there is only one vertex in the source subgraph
+    source_vertex = source_vertices.at(0);
+  }
+  else{
+    // Conservation of flow for source: ∑ ϕ_out - ∑ ϕ_in = 1.0
+    for (auto* vertex: source_vertices){
+      double sum_phi_out_minus_sum_phi_in = 0;
+      for (const auto* outgoing_edge : vertex->outgoing_edges()){
+        sum_phi_out_minus_sum_phi_in += result.GetSolution(outgoing_edge->phi());
+      }
+      for (const auto* incoming_edge : vertex->incoming_edges()){
+        sum_phi_out_minus_sum_phi_in -= result.GetSolution(incoming_edge->phi());
+      }
+      if (std::abs(sum_phi_out_minus_sum_phi_in - 1) < 100.0 * std::numeric_limits<double>::epsilon()){
+        source_vertex = vertex;
+        break;
+      }
+    }
+  }
+  if (source_vertex == nullptr){
+    auto error_msg = fmt::format("Could not find source vertex in the source subgraph {}. Is the mathematical program result obtained from the same subgraph?", source.name());
+    throw error_msg;
+  }
+  // now find which vertex in the target got chosen.
+  Vertex* target_vertex = nullptr;
+  const auto& target_vertices {subgraph_to_vertices_.at(&target)};
+  if (target_vertices.size() == 1){
+    // there is only one vertex in the target subgraph
+    target_vertex = target_vertices.at(0);
+  }
+  else{
+    // Conservation of flow for target: ∑ ϕ_out - ∑ ϕ_in = -1.0
+    for (auto* vertex: target_vertices){
+      double sum_phi_out_minus_sum_phi_in = 0;
+      for (const auto* outgoing_edge : vertex->outgoing_edges()){
+        sum_phi_out_minus_sum_phi_in += result.GetSolution(outgoing_edge->phi());
+      }
+      for (const auto* incoming_edge : vertex->incoming_edges()){
+        sum_phi_out_minus_sum_phi_in -= result.GetSolution(incoming_edge->phi());
+      }
+      if (std::abs(sum_phi_out_minus_sum_phi_in - 1) < 100.0 * std::numeric_limits<double>::epsilon()){
+        target_vertex = vertex;
+        break;
+      }
+    }
+  }
+  if (target_vertex == nullptr){
+    auto error_msg = fmt::format("Could not find target vertex in the target subgraph {}. Is the mathematical program result obtained from the same subgraph?", target.name());
+    throw error_msg;
+  }
+  // now we have the source and target vertices, let's find the path between them.
+  const auto path = gcs_.GetSolutionPath(*source_vertex, *target_vertex, result, tolerance);
+  // now we have the path, let's extract the regions.
+  geometry::optimization::ConvexSets regions_path;
+  for (size_t i = 0; i < path.size(); ++i){
+    if (!include_ends && i == 0){
+      // skip the first region, if requested.
+      continue;
+    }
+    const auto& starting_vertex = path[i]->u();
+    regions_path.push_back(copyable_unique_ptr<drake::geometry::optimization::ConvexSet>(vertex_to_region_.at(&starting_vertex)));
+  }
+  // add the last region, if requested.
+  if (include_ends){
+    regions_path.push_back(copyable_unique_ptr<drake::geometry::optimization::ConvexSet>(vertex_to_region_.at(&path.back()->v())));
+  }
+  return regions_path;
 }
 
 Edge* GcsTrajectoryOptimization::AddEdge(Vertex* u, Vertex* v) {
