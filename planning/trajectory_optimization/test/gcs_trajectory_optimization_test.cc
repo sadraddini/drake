@@ -18,7 +18,6 @@
 #include "drake/multibody/tree/revolute_joint.h"
 #include "drake/solvers/gurobi_solver.h"
 #include "drake/solvers/mosek_solver.h"
-#include "drake/solvers/clp_solver.h"
 
 namespace drake {
 namespace planning {
@@ -1489,7 +1488,8 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction1) {
   const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
   const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
   const auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, 1.0, weight_matrix, velocity_bounds);
-  EXPECT_EQ(traj.get_number_of_segments(), 2);
+  // The trajectory in start and goal_region would have zero time. Returning only the middle region.
+  EXPECT_EQ(traj.get_number_of_segments(), 1);
   EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start, 1e-6));
   // The shortest path is from start to (1.0, 1.0), the lower left corner of the goal region.
   EXPECT_TRUE(CompareMatrices(traj.value(traj.end_time()), Vector2d{1.0, 1.0}, 1e-6));
@@ -1498,7 +1498,7 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction1) {
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction2) {
-  // Only two regions. The shortest path is not moving at all.
+  // Only two regions. The shortest path is not moving at all. Zero trajectory.
   Vector2d start(0.0, 0.0);
   HPolyhedron goal_region = HPolyhedron::MakeUnitBox(2);
   const auto regions_path = MakeConvexSets(Point(start), goal_region);
@@ -1507,11 +1507,8 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction2) {
   const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
   const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
   const auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, 1.0, weight_matrix, velocity_bounds);
-  EXPECT_EQ(traj.get_number_of_segments(), 1);
-  EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start, 1e-6));
-  // The shortest path is not moving at all.
-  EXPECT_TRUE(CompareMatrices(traj.value(traj.end_time()), start, 1e-6));
-  EXPECT_NEAR(traj.end_time() - traj.start_time(), 0.0, 1e-6);
+  // The trajectory in start and goal_region would have zero time. Returning a zero duration trajectory.
+  EXPECT_EQ(traj.get_number_of_segments(), 0);
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction3) {
@@ -1524,7 +1521,43 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction3) {
   const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
   const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
   DRAKE_EXPECT_THROWS_MESSAGE(GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, 1.0, weight_matrix, velocity_bounds),
-                              ".*The regions are not connected.*");
+                              ".*The convex_set_sequence is not a sequence of connected regions.*");
+}
+
+GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction4) {
+  // With wrapping continous joints.
+  Vector2d start(10 * M_PI + 0.1, 0);
+  HPolyhedron middle_region = HPolyhedron::MakeBox(Vector2d{-1.0, -1.0}, Vector2d{1.0, 1.0});
+  HPolyhedron goal_region = HPolyhedron::MakeBox(Vector2d{1.0, 1.0}, Vector2d{2.0, 2.0});
+  const auto regions_path = MakeConvexSets(Point(start), middle_region, goal_region);
+  const std::vector<int> continuous_revolute_joints = {0};
+  const Eigen::Matrix2d weight_matrix = Eigen::MatrixXd::Identity(2, 2);
+  const Eigen::Vector2d lower_velocity_bound = Eigen::Vector2d{-0.5, -1.0};
+  const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
+  const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
+  auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, continuous_revolute_joints, 2, 1.0, weight_matrix, velocity_bounds);
+  // The trajectory in start and goal_region would have zero time. Returning only the middle region.
+  EXPECT_EQ(traj.get_number_of_segments(), 1);
+  Vector2d start_wrapped {0.1, 0};
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start_wrapped, 1e-6));
+}
+
+GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction5) {
+  // With wrapping continous joints
+  Vector2d start(0.5, -12 * M_PI + 0.1);
+  HPolyhedron middle_region = HPolyhedron::MakeBox(Vector2d{-1.0, -1.0}, Vector2d{1.0, 1.0});
+  HPolyhedron goal_region = HPolyhedron::MakeBox(Vector2d{1.0, 1.0}, Vector2d{2.0, 2.0});
+  const auto regions_path = MakeConvexSets(Point(start), middle_region, goal_region);
+  const std::vector<int> continuous_revolute_joints = {1};
+  const Eigen::Matrix2d weight_matrix = Eigen::MatrixXd::Identity(2, 2);
+  const Eigen::Vector2d lower_velocity_bound = Eigen::Vector2d{-0.5, -1.0};
+  const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
+  const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
+  auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, continuous_revolute_joints, 2, 1.0, weight_matrix, velocity_bounds);
+  // The trajectory in start and goal_region would have zero time. Returning only the middle region.
+  EXPECT_EQ(traj.get_number_of_segments(), 1);
+  Vector2d start_wrapped {0.5, 0.1};
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start_wrapped, 1e-6));
 }
 
 }  // namespace

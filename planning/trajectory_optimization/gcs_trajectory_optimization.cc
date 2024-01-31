@@ -150,9 +150,16 @@ PairwiseIntersectionsContinuousJoints(
 
       // First, we compute what the offset that should be applied to
       // convex_sets_A[i] to potentially make it overlap with convex_sets_B[j].
-      for (const int k : continuous_revolute_joints) {
-        if (region_minimum_and_maximum_values_A[i][k].first <
-            region_minimum_and_maximum_values_B[j][k].first) {
+      for (int kk = 0; kk < ssize(continuous_revolute_joints); ++kk) {
+        const int k = continuous_revolute_joints.at(kk);
+        log()->info("Checking if sets {} and {} overlap along dimension {}.",
+                     i, j, k);
+        log()->info("Region A: [{}, {}]", region_minimum_and_maximum_values_A.at(i).at(kk).first,
+                     region_minimum_and_maximum_values_A.at(i).at(kk).second);
+        log()->info("Region B: [{}, {}]", region_minimum_and_maximum_values_B.at(j).at(kk).first,
+                      region_minimum_and_maximum_values_B.at(j).at(kk).second);
+        if (region_minimum_and_maximum_values_A.at(i).at(kk).first <
+            region_minimum_and_maximum_values_B.at(j).at(kk).first) {
           // In this case, the minimum value of convex_sets_A[i] along dimension
           // k is smaller than the minimum value of convex_sets_B[j] along
           // dimension k, so we must translate by a positive amount. By the
@@ -164,8 +171,8 @@ PairwiseIntersectionsContinuousJoints(
           // by taking that difference, dividing by 2π, and truncating.
           offset[k] =
               2 * M_PI *
-              std::floor((region_minimum_and_maximum_values_B[j][k].second -
-                          region_minimum_and_maximum_values_A[i][k].first) /
+              std::floor((region_minimum_and_maximum_values_B.at(j).at(kk).second -
+                          region_minimum_and_maximum_values_A.at(i).at(kk).first) /
                          (2 * M_PI));
         } else {
           // In this case, the minimum value of convex_sets_B[j] along dimension
@@ -175,8 +182,8 @@ PairwiseIntersectionsContinuousJoints(
           // translation.
           offset[k] =
               -2 * M_PI *
-              std::floor((region_minimum_and_maximum_values_A[i][k].second -
-                          region_minimum_and_maximum_values_B[j][k].first) /
+              std::floor((region_minimum_and_maximum_values_A.at(i).at(kk).second -
+                          region_minimum_and_maximum_values_B.at(j).at(kk).first) /
                          (2 * M_PI));
         }
       }
@@ -1248,34 +1255,25 @@ trajectories::CompositeTrajectory<double> GcsTrajectoryOptimization::SolvePathVi
           DRAKE_DEMAND(convex_set->ambient_dimension() == dim);
         }  
       auto gcs = GcsTrajectoryOptimization(dim, continuous_revolute_joints);
-      const int start_order = convex_set_sequence.front()->MaybeGetPoint() ? 0 : order;
-      const int end_order = convex_set_sequence.back()->MaybeGetPoint() ? 0 : order;
-      auto& source = gcs.AddRegions({convex_set_sequence.front()}, start_order);
-      DRAKE_DEMAND(gcs.graph_of_convex_sets().Vertices().size() == 1);
-      const auto* source_vertex = gcs.graph_of_convex_sets().Vertices().front();
-      auto& target = gcs.AddRegions({convex_set_sequence.back()}, end_order);
-      DRAKE_DEMAND(gcs.graph_of_convex_sets().Vertices().size() == 2);
-      const auto* target_vertex = gcs.graph_of_convex_sets().Vertices().back();
-      if (convex_set_sequence.size()>2){
-        ConvexSets convex_set_sequence_without_endpoints(convex_set_sequence.begin() + 1, convex_set_sequence.end() - 1);
+        double h_min = 0;
+        double h_max = 10;
+        const auto edges_and_offsets_vec = PairwiseIntersectionsContinuousJoints(convex_set_sequence, continuous_revolute_joints);
         std::vector<std::pair<int, int>> edges_between_regions;
-        for (int i = 0; i < ssize(convex_set_sequence_without_endpoints) - 1; ++i){
-          edges_between_regions.emplace_back(i, i + 1);
+        std::vector<Eigen::VectorXd> offsets;
+        for (const auto& edge_and_offset : edges_and_offsets_vec){
+          const int i = std::get<0>(edge_and_offset);
+          const int j = std::get<1>(edge_and_offset);
+          if (i + 1 == j){
+            Eigen::VectorXd offset = std::get<2>(edge_and_offset);
+            edges_between_regions.emplace_back(i, j);
+            offsets.emplace_back(offset);
+            log()->info("Edge between regions {} and {} has offset {}", i, j, offset.transpose());
+          }
         }
-        auto& main = gcs.AddRegions(convex_set_sequence_without_endpoints, edges_between_regions, order);
-        gcs.AddEdges(source, main);
-        gcs.AddEdges(main, target);
-      }
-      else{
-        gcs.AddEdges(source, target);
-      }
-      // log the vertices and edges
-      for (const auto* vertex : gcs.graph_of_convex_sets().Vertices()){
-        log()->info("Vertex {} has {} incoming edges and {} outgoing edges.", vertex->name(), vertex->incoming_edges().size(), vertex->outgoing_edges().size());
-      }
-      for (const auto* edge : gcs.graph_of_convex_sets().Edges()){
-        log()->info("Edge {} has source vertex {} and target vertex {}.", edge->name(), edge->u().name(), edge->v().name());
-      }
+        if (edges_between_regions.size() != convex_set_sequence.size() - 1){
+          throw std::runtime_error("The convex_set_sequence is not a sequence of connected regions.");
+        }
+        auto& main = gcs.AddRegions(convex_set_sequence, edges_between_regions, order, h_min, h_max, "main", offsets);
       if (continuity_order.has_value()){
         gcs.AddPathContinuityConstraints(continuity_order.value());
       }
@@ -1288,67 +1286,43 @@ trajectories::CompositeTrajectory<double> GcsTrajectoryOptimization::SolvePathVi
       if (velocity_bounds.has_value()){
         gcs.AddVelocityBounds(velocity_bounds.value().first, velocity_bounds.value().second);
       }
-      // get the edge paths from source_vertex to target_vertex.
+
       std::vector<const Edge*> edge_path;
-      std::vector<const Vertex*> internal_vertex_path;
-      const Vertex* current_vertex = source_vertex;
-      while (current_vertex != target_vertex){
-        if (current_vertex->outgoing_edges().size() != 1){
-          throw std::runtime_error("The regions are not connected on a path.");
-        }
+      std::vector<const Vertex*> vertex_path;
+      const Vertex* current_vertex = main.vertices_.front();
+      const Vertex* last_vertex = main.vertices_.back();
+      DRAKE_DEMAND(current_vertex->incoming_edges().size() == 0);
+      DRAKE_DEMAND(current_vertex->outgoing_edges().size() == 1);
+      while (current_vertex != last_vertex){
+        DRAKE_DEMAND(current_vertex->outgoing_edges().size() == 1);
         const auto* edge = current_vertex->outgoing_edges().front();
         edge_path.push_back(edge);
         current_vertex = &(edge->v());
-        if (current_vertex != target_vertex){
-          internal_vertex_path.push_back(current_vertex);
-        }
       }
-      DRAKE_DEMAND(current_vertex == target_vertex);
-      DRAKE_DEMAND(edge_path.size() == convex_set_sequence.size() - 1);
-      DRAKE_DEMAND(internal_vertex_path.size() == convex_set_sequence.size() - 2);
+      for (const auto* vertex : gcs.graph_of_convex_sets().Vertices()){
+        vertex_path.push_back(vertex);
+      }
       const auto result = gcs.graph_of_convex_sets().SolveConvexRestriction(edge_path, options);
-      if (!result.is_success()){
-        throw std::runtime_error("Could not find a solution to the convex restriction problem.");
-      }
+      DRAKE_DEMAND(result.is_success());
       // lets' extract the path from the result
       std::vector<copyable_unique_ptr<Trajectory<double>>> bezier_curves;
       // first vertex should be the source
       const Vertex* first_path_vertex = &(edge_path.front()->u());
-      DRAKE_DEMAND(first_path_vertex == source_vertex);
+      DRAKE_DEMAND(first_path_vertex == main.vertices_.front());
       double start_time = 0;
-      if (source.order() > 0){
-        int num_control_points = source.order() + 1;
-        Eigen::VectorXd solution = result.GetSolution(first_path_vertex->x());
-        const MatrixX<double> control_points =
-            Eigen::Map<MatrixX<double>>(solution.data(),
-                                        dim, num_control_points);
-        double h = solution.tail<1>().value();
-        bezier_curves.emplace_back(std::make_unique<BezierCurve<double>>(
-          start_time, start_time + h, control_points));
-        start_time += h;
-      }
+      int num_control_points = main.order() + 1;
       // now extract the internal path
-      for (const Vertex* v : internal_vertex_path) {
-        int num_control_points = order + 1;
+      for (const Vertex* v : vertex_path) {
         Eigen::VectorXd solution = result.GetSolution(v->x());
+        double h = solution.tail<1>().value();
+        if (h < 1e-6){
+          // skip vertices with near zero duration.
+          continue;
+        }
         const MatrixX<double> control_points =
             Eigen::Map<MatrixX<double>>(solution.data(),
                                         dim, num_control_points);
-        double h = solution.tail<1>().value();
-        bezier_curves.emplace_back(std::make_unique<BezierCurve<double>>(
-          start_time, start_time + h, control_points));
-        start_time += h;
-      }
-      // now extract the last vertex
-      const Vertex* last_path_vertex = &(edge_path.back()->v());
-      DRAKE_DEMAND(last_path_vertex == target_vertex);
-      if (target.order() > 0){
-        int num_control_points = target.order() + 1;
-           Eigen::VectorXd solution = result.GetSolution(last_path_vertex->x());
-        const MatrixX<double> control_points =
-            Eigen::Map<MatrixX<double>>(solution.data(),
-                                        dim, num_control_points);
-        double h = solution.tail<1>().value();
+
         bezier_curves.emplace_back(std::make_unique<BezierCurve<double>>(
           start_time, start_time + h, control_points));
         start_time += h;
