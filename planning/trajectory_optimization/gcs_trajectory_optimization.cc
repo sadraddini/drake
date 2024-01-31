@@ -119,7 +119,6 @@ Subgraph::Subgraph(
     vertex_set.emplace_back(time_scaling_set);
     vertices_.emplace_back(traj_opt_.gcs_.AddVertex(
         CartesianProduct(vertex_set), fmt::format("{}: Region{}", name_, i)));
-    traj_opt->vertex_to_region_[vertices_.back()] = regions_[i]->Clone();
     traj_opt->vertex_to_subgraph_[vertices_.back()] = this;
   }
   traj_opt->subgraph_to_vertices_[this] = vertices_;
@@ -975,7 +974,7 @@ GcsTrajectoryOptimization::SolvePath(
 geometry::optimization::ConvexSets GcsTrajectoryOptimization::GetRegionsPath(const Subgraph& source, const Subgraph& target, 
 const solvers::MathematicalProgramResult& result, const double tolerance, bool include_ends) const{
   // let's find which vertex in the source got chosen.
-  Vertex* source_vertex = nullptr;
+  const Vertex* source_vertex = nullptr;
   const auto& source_vertices {subgraph_to_vertices_.at(&source)};
   if (source_vertices.size() == 1){
     // there is only one vertex in the source subgraph
@@ -983,7 +982,7 @@ const solvers::MathematicalProgramResult& result, const double tolerance, bool i
   }
   else{
     // Conservation of flow for source: ∑ ϕ_out - ∑ ϕ_in = 1.0
-    for (auto* vertex: source_vertices){
+    for (const auto* vertex: source_vertices){
       double sum_phi_out_minus_sum_phi_in = 0;
       for (const auto* outgoing_edge : vertex->outgoing_edges()){
         sum_phi_out_minus_sum_phi_in += result.GetSolution(outgoing_edge->phi());
@@ -992,14 +991,14 @@ const solvers::MathematicalProgramResult& result, const double tolerance, bool i
         sum_phi_out_minus_sum_phi_in -= result.GetSolution(incoming_edge->phi());
       }
       if (std::abs(sum_phi_out_minus_sum_phi_in - 1) < 100.0 * std::numeric_limits<double>::epsilon()){
-        source_vertex = vertex;
-        break;
+          source_vertex = vertex;
+          break;
       }
     }
   }
   if (source_vertex == nullptr){
-    auto error_msg = fmt::format("Could not find source vertex in the source subgraph {}. Is the mathematical program result obtained from the same subgraph?", source.name());
-    throw error_msg;
+    auto error_msg = fmt::format("Could not find any source vertex on the source subgraph {}", source.name());
+    throw std::runtime_error(error_msg);
   }
   // now find which vertex in the target got chosen.
   Vertex* target_vertex = nullptr;
@@ -1018,15 +1017,15 @@ const solvers::MathematicalProgramResult& result, const double tolerance, bool i
       for (const auto* incoming_edge : vertex->incoming_edges()){
         sum_phi_out_minus_sum_phi_in -= result.GetSolution(incoming_edge->phi());
       }
-      if (std::abs(sum_phi_out_minus_sum_phi_in - 1) < 100.0 * std::numeric_limits<double>::epsilon()){
-        target_vertex = vertex;
-        break;
+      if (std::abs(sum_phi_out_minus_sum_phi_in + 1) < 100.0 * std::numeric_limits<double>::epsilon()){
+          target_vertex = vertex;
+          break;
       }
     }
   }
   if (target_vertex == nullptr){
-    auto error_msg = fmt::format("Could not find target vertex in the target subgraph {}. Is the mathematical program result obtained from the same subgraph?", target.name());
-    throw error_msg;
+    auto error_msg = fmt::format("Could not find any target vertex on the target subgraph {}.", target.name());
+    throw std::runtime_error(error_msg);
   }
   // now we have the source and target vertices, let's find the path between them.
   const auto path = gcs_.GetSolutionPath(*source_vertex, *target_vertex, result, tolerance);
@@ -1037,12 +1036,15 @@ const solvers::MathematicalProgramResult& result, const double tolerance, bool i
       // skip the first region, if requested.
       continue;
     }
-    const auto& starting_vertex = path[i]->u();
-    regions_path.push_back(copyable_unique_ptr<drake::geometry::optimization::ConvexSet>(vertex_to_region_.at(&starting_vertex)));
+    const CartesianProduct* starting_set;
+    DRAKE_DEMAND(starting_set = dynamic_cast<const CartesianProduct*>(&(path[i]->u().set())));
+    regions_path.push_back(copyable_unique_ptr<drake::geometry::optimization::ConvexSet>(starting_set->factor(0)));
   }
   // add the last region, if requested.
   if (include_ends){
-    regions_path.push_back(copyable_unique_ptr<drake::geometry::optimization::ConvexSet>(vertex_to_region_.at(&path.back()->v())));
+    const CartesianProduct* ending_set;
+    DRAKE_DEMAND(ending_set = dynamic_cast<const CartesianProduct*>(&(path.back()->v().set())));
+    regions_path.push_back(copyable_unique_ptr<drake::geometry::optimization::ConvexSet>(ending_set->factor(0)));
   }
   return regions_path;
 }
@@ -1128,12 +1130,23 @@ trajectories::CompositeTrajectory<double> GcsTrajectoryOptimization::SolvePathVi
       const auto* target_vertex = gcs.graph_of_convex_sets().Vertices().back();
       if (convex_set_sequence.size()>2){
         ConvexSets convex_set_sequence_without_endpoints(convex_set_sequence.begin() + 1, convex_set_sequence.end() - 1);
-        auto& main = gcs.AddRegions(convex_set_sequence_without_endpoints, order);
+        std::vector<std::pair<int, int>> edges_between_regions;
+        for (int i = 0; i < ssize(convex_set_sequence_without_endpoints) - 1; ++i){
+          edges_between_regions.emplace_back(i, i + 1);
+        }
+        auto& main = gcs.AddRegions(convex_set_sequence_without_endpoints, edges_between_regions, order);
         gcs.AddEdges(source, main);
         gcs.AddEdges(main, target);
       }
       else{
         gcs.AddEdges(source, target);
+      }
+      // log the vertices and edges
+      for (const auto* vertex : gcs.graph_of_convex_sets().Vertices()){
+        log()->info("Vertex {} has {} incoming edges and {} outgoing edges.", vertex->name(), vertex->incoming_edges().size(), vertex->outgoing_edges().size());
+      }
+      for (const auto* edge : gcs.graph_of_convex_sets().Edges()){
+        log()->info("Edge {} has source vertex {} and target vertex {}.", edge->name(), edge->u().name(), edge->v().name());
       }
       if (continuity_order.has_value()){
         gcs.AddPathContinuityConstraints(continuity_order.value());
@@ -1152,7 +1165,9 @@ trajectories::CompositeTrajectory<double> GcsTrajectoryOptimization::SolvePathVi
       std::vector<const Vertex*> internal_vertex_path;
       const Vertex* current_vertex = source_vertex;
       while (current_vertex != target_vertex){
-        DRAKE_DEMAND(current_vertex->outgoing_edges().size() == 1);
+        if (current_vertex->outgoing_edges().size() != 1){
+          throw std::runtime_error("The regions are not connected on a path.");
+        }
         const auto* edge = current_vertex->outgoing_edges().front();
         edge_path.push_back(edge);
         current_vertex = &(edge->v());
@@ -1165,7 +1180,7 @@ trajectories::CompositeTrajectory<double> GcsTrajectoryOptimization::SolvePathVi
       DRAKE_DEMAND(internal_vertex_path.size() == convex_set_sequence.size() - 2);
       const auto result = gcs.graph_of_convex_sets().SolveConvexRestriction(edge_path, options);
       if (!result.is_success()){
-        throw std::runtime_error("Could not solve SolvePathViaConvexRestriction. Check for infeasibility.");
+        throw std::runtime_error("Could not find a solution to the convex restriction problem.");
       }
       // lets' extract the path from the result
       std::vector<copyable_unique_ptr<Trajectory<double>>> bezier_curves;

@@ -18,6 +18,7 @@
 #include "drake/multibody/tree/revolute_joint.h"
 #include "drake/solvers/gurobi_solver.h"
 #include "drake/solvers/mosek_solver.h"
+#include "drake/solvers/clp_solver.h"
 
 namespace drake {
 namespace planning {
@@ -80,14 +81,6 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, Basic) {
   EXPECT_EQ(traj.cols(), 1);
   EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start, 1e-6));
   EXPECT_TRUE(CompareMatrices(traj.value(traj.end_time()), goal, 1e-6));
-  // recover the regions visited by the trajectory.
-  auto regions_traj = gcs.GetRegionsPath(source, target, result);
-  EXPECT_EQ(regions_traj.size(), 3);
-  ASSERT_TRUE(regions_traj.at(0)->MaybeGetPoint().has_value());
-  EXPECT_TRUE(CompareMatrices(regions_traj.front()->MaybeGetPoint().value(), start, 1e-6));
-  EXPECT_NO_THROW(dynamic_cast<const HPolyhedron*>(regions_traj.at(1).get()));
-  ASSERT_TRUE(regions_traj.at(2)->MaybeGetPoint().has_value());
-  EXPECT_TRUE(CompareMatrices(regions_traj.back()->MaybeGetPoint().value(), goal, 1e-6));
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, PathLengthCost) {
@@ -1384,6 +1377,102 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, GetContinuousJoints) {
   ASSERT_EQ(continuous_joint_indices.size(), 2);
   EXPECT_EQ(continuous_joint_indices[0], 2);
   EXPECT_EQ(continuous_joint_indices[1], 6);
+}
+
+GTEST_TEST(GcsTrajectoryOptimizationTest, GetRegionsPath) {
+  const int kDimension = 2;
+  const double kMinimumDuration = 1.0;
+  GcsTrajectoryOptimization gcs(kDimension);
+  EXPECT_EQ(gcs.num_positions(), kDimension);
+
+  Vector2d start_1(0, 1.0), start_2(0, -2.0);
+  Vector2d goal_1(2.0, -2.0), goal_2(2.0, 2.0);
+
+  Vector2d lb = Vector2d {-0.5, -2.5};
+  Vector2d ub = Vector2d {2.5, 2.5};
+  const HPolyhedron env_box = HPolyhedron::MakeBox(lb, ub);
+  EXPECT_TRUE(env_box.PointInSet(start_1) && env_box.PointInSet(start_2));
+  EXPECT_TRUE(env_box.PointInSet(goal_1) && env_box.PointInSet(goal_2));
+  auto& main = gcs.AddRegions(MakeConvexSets(env_box, env_box), 1, kMinimumDuration, 10, "Xmain");
+  auto& source = gcs.AddRegions(MakeConvexSets(Point(start_1), Point(start_2)), 0, 0, 10, "Xsource");
+  auto& target = gcs.AddRegions(MakeConvexSets(Point(goal_1), Point(goal_2)), 0, 0, 10, "Xtarget");
+
+  gcs.AddEdges(source, main);
+  gcs.AddEdges(main, target);
+
+  gcs.AddPathLengthCost();
+  // The shortst path is from start_2 to goal_1.
+  auto [traj, result] = gcs.SolvePath(source, target);
+  EXPECT_TRUE(result.is_success());
+  
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start_2, 1e-6));
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.end_time()), goal_1, 1e-6));
+
+  // Recover the regions visited by the trajectory.
+  auto regions_path = gcs.GetRegionsPath(source, target, result);
+  EXPECT_EQ(regions_path.size(), 3);
+  ASSERT_TRUE(regions_path.at(0)->MaybeGetPoint().has_value());
+  EXPECT_TRUE(CompareMatrices(regions_path.front()->MaybeGetPoint().value(), start_2, 1e-6));
+  const HPolyhedron* main_region = dynamic_cast<const HPolyhedron*>(regions_path.at(1).get());
+  EXPECT_TRUE(main_region != nullptr);
+  ASSERT_TRUE(regions_path.at(2)->MaybeGetPoint().has_value());
+  EXPECT_TRUE(CompareMatrices(regions_path.back()->MaybeGetPoint().value(), goal_1, 1e-6));
+  // Pass invalid source and/or target.
+  DRAKE_EXPECT_THROWS_MESSAGE(gcs.GetRegionsPath(source, source, result),
+                              ".*Could not find any target vertex.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(gcs.GetRegionsPath(main, target, result),
+                              ".*Could not find any source vertex.*");
+  DRAKE_EXPECT_THROWS_MESSAGE(gcs.GetRegionsPath(main, main, result),
+                              ".*Could not find any source vertex.*");
+}
+
+GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction1) {
+  // The standard case
+  Vector2d start(0.0, 0.0);
+  HPolyhedron middle_region = HPolyhedron::MakeBox(Vector2d{-1.0, -1.0}, Vector2d{1.0, 1.0});
+  HPolyhedron goal_region = HPolyhedron::MakeBox(Vector2d{1.0, 1.0}, Vector2d{2.0, 2.0});
+  const auto regions_path = MakeConvexSets(Point(start), middle_region, goal_region);
+  const Eigen::Matrix2d weight_matrix = Eigen::MatrixXd::Identity(2, 2);
+  const Eigen::Vector2d lower_velocity_bound = Eigen::Vector2d{-0.5, -1.0};
+  const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
+  const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
+  const auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, 1.0, weight_matrix, velocity_bounds);
+  EXPECT_EQ(traj.get_number_of_segments(), 2);
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start, 1e-6));
+  // The shortest path is from start to (1.0, 1.0), the lower left corner of the goal region.
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.end_time()), Vector2d{1.0, 1.0}, 1e-6));
+  // Trajectory time will be 2.0 given the velocity bounds.
+  EXPECT_NEAR(traj.end_time() - traj.start_time(), 2.0, 1e-6);
+}
+
+GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction2) {
+  // Only two regions. The shortest path is not moving at all.
+  Vector2d start(0.0, 0.0);
+  HPolyhedron goal_region = HPolyhedron::MakeUnitBox(2);
+  const auto regions_path = MakeConvexSets(Point(start), goal_region);
+  const Eigen::Matrix2d weight_matrix = Eigen::MatrixXd::Identity(2, 2);
+  const Eigen::Vector2d lower_velocity_bound = Eigen::Vector2d{-0.5, -1.0};
+  const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
+  const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
+  const auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, 1.0, weight_matrix, velocity_bounds);
+  EXPECT_EQ(traj.get_number_of_segments(), 1);
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start, 1e-6));
+  // The shortest path is not moving at all.
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.end_time()), start, 1e-6));
+  EXPECT_NEAR(traj.end_time() - traj.start_time(), 0.0, 1e-6);
+}
+
+GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction3) {
+  // Regions that are not connected.
+  Vector2d start(0.0, 0.0);
+  HPolyhedron goal_region = HPolyhedron::MakeBox(Vector2d{1.0, 1.0}, Vector2d{2.0, 2.0});
+  const auto regions_path = MakeConvexSets(Point(start), goal_region);
+  const Eigen::Matrix2d weight_matrix = Eigen::MatrixXd::Identity(2, 2);
+  const Eigen::Vector2d lower_velocity_bound = Eigen::Vector2d{-0.5, -1.0};
+  const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
+  const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
+  DRAKE_EXPECT_THROWS_MESSAGE(GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, 1.0, weight_matrix, velocity_bounds),
+                              ".*The regions are not connected.*");
 }
 
 }  // namespace

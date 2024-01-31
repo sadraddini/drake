@@ -530,7 +530,7 @@ class GcsTrajectoryOptimization final {
   static trajectories::CompositeTrajectory<double> NormalizeSegmentTimes(
       const trajectories::CompositeTrajectory<double>& trajectory);
 
-  /** Formulates and solves the mixed-integer convex formulation of the*/
+  /** Formulates and solves a motion planning problem with a single subgraph.*/
   static trajectories::CompositeTrajectory<double> SolvePathViaConvexRestriction(
       const geometry::optimization::ConvexSets& convex_set_sequence, const int order, 
       std::vector< int >continuous_revolute_joints = std::vector< int >(),
@@ -557,8 +557,6 @@ class GcsTrajectoryOptimization final {
   std::map<const Subgraph*, std::vector<geometry::optimization::GraphOfConvexSets::Vertex*>> subgraph_to_vertices_;
   std::map<const geometry::optimization::GraphOfConvexSets::Vertex*, Subgraph*>
       vertex_to_subgraph_;
-  std::map<const geometry::optimization::GraphOfConvexSets::Vertex*,
-           std::unique_ptr<geometry::optimization::ConvexSet>> vertex_to_region_;
   std::vector<double> global_time_costs_;
   std::vector<Eigen::MatrixXd> global_path_length_costs_;
   std::vector<std::pair<Eigen::VectorXd, Eigen::VectorXd>>
