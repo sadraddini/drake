@@ -554,7 +554,6 @@ class GcsTrajectoryOptimization final {
   // Store the subgraphs by reference.
   std::vector<std::unique_ptr<Subgraph>> subgraphs_;
   std::vector<std::unique_ptr<EdgesBetweenSubgraphs>> subgraph_edges_;
-  std::map<const Subgraph*, std::vector<geometry::optimization::GraphOfConvexSets::Vertex*>> subgraph_to_vertices_;
   std::map<const geometry::optimization::GraphOfConvexSets::Vertex*, Subgraph*>
       vertex_to_subgraph_;
   std::vector<double> global_time_costs_;

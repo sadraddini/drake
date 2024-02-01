@@ -224,6 +224,13 @@ PairwiseIntersectionsContinuousJoints(
   return PairwiseIntersectionsContinuousJoints(convex_sets_A, {},
                                                continuous_revolute_joints);
 }
+
+bool IsVertexFromPointSet(const Vertex& vertex) {
+   const auto* cartesian_set = dynamic_cast<const CartesianProduct*>(&(vertex.set()));
+    DRAKE_DEMAND(cartesian_set != nullptr);
+    return cartesian_set->factor(0).MaybeGetPoint().has_value();
+}
+
 }  // namespace
 
 Subgraph::Subgraph(
@@ -276,7 +283,6 @@ Subgraph::Subgraph(
         CartesianProduct(vertex_set), fmt::format("{}: Region{}", name_, i)));
     traj_opt->vertex_to_subgraph_[vertices_.back()] = this;
   }
-  traj_opt->subgraph_to_vertices_[this] = vertices_;
 
   r_trajectory_ =
       BezierCurve<double>(0, 1, MatrixXd::Zero(num_positions(), order + 1));
@@ -478,6 +484,10 @@ void Subgraph::AddPathContinuityConstraints(int continuity_order) {
   for (int i = 0; i < num_positions(); ++i) {
     for (Edge* edge : edges_) {
       // Add continuity constraints.
+      if (IsVertexFromPointSet(edge->u()) || IsVertexFromPointSet(edge->v())) {
+        log()->warn("Skipping continuity constraint for edge {} because one of the vertices is from a point set.", edge->name());
+        continue;
+      }
       edge->AddConstraint(Binding<LinearEqualityConstraint>(
           continuity_constraint, {GetControlPoints(edge->u()).row(i),
                                   GetControlPoints(edge->v()).row(i)}));
@@ -777,6 +787,10 @@ void EdgesBetweenSubgraphs::AddPathContinuityConstraints(int continuity_order) {
 
   for (int i = 0; i < num_positions(); ++i) {
     for (Edge* edge : edges_) {
+      if (IsVertexFromPointSet(edge->u()) || IsVertexFromPointSet(edge->v())) {
+        log()->warn("Edges between Subgraphs: Skipping continuity constraint for edge {} because one of the vertices is from a point set.", edge->name());
+        continue;
+      }
       // Add continuity constraints.
       edge->AddConstraint(Binding<LinearEqualityConstraint>(
           continuity_constraint,
@@ -1106,7 +1120,7 @@ geometry::optimization::ConvexSets GcsTrajectoryOptimization::GetRegionsPath(con
 const solvers::MathematicalProgramResult& result, const double tolerance, bool include_ends) const{
   // let's find which vertex in the source got chosen.
   const Vertex* source_vertex = nullptr;
-  const auto& source_vertices {subgraph_to_vertices_.at(&source)};
+  const auto& source_vertices {source.vertices_};
   if (source_vertices.size() == 1){
     // there is only one vertex in the source subgraph
     source_vertex = source_vertices.at(0);
@@ -1133,7 +1147,7 @@ const solvers::MathematicalProgramResult& result, const double tolerance, bool i
   }
   // now find which vertex in the target got chosen.
   Vertex* target_vertex = nullptr;
-  const auto& target_vertices {subgraph_to_vertices_.at(&target)};
+  const auto& target_vertices {target.vertices_};
   if (target_vertices.size() == 1){
     // there is only one vertex in the target subgraph
     target_vertex = target_vertices.at(0);
@@ -1263,15 +1277,14 @@ trajectories::CompositeTrajectory<double> GcsTrajectoryOptimization::SolvePathVi
             Eigen::VectorXd offset = std::get<2>(edge_and_offset);
             edges_between_regions.emplace_back(i, j);
             offsets.emplace_back(offset);
-            log()->info("Edge between regions {} and {} has offset {}", i, j, offset.transpose());
           }
         }
         if (edges_between_regions.size() != convex_set_sequence.size() - 1){
           throw std::runtime_error("The convex_set_sequence is not a sequence of connected regions.");
         }
-        auto& main = gcs.AddRegions(convex_set_sequence, edges_between_regions, order, h_min, h_max, "main", offsets);
+      auto& main = gcs.AddRegions(convex_set_sequence, edges_between_regions, order, h_min, h_max, "main", offsets);
       if (continuity_order.has_value()){
-        gcs.AddPathContinuityConstraints(continuity_order.value());
+        gcs.AddPathContinuityConstraints(continuity_order.value());        
       }
       if (time_cost.has_value()){
         gcs.AddTimeCost(time_cost.value());
@@ -1318,7 +1331,6 @@ trajectories::CompositeTrajectory<double> GcsTrajectoryOptimization::SolvePathVi
         const MatrixX<double> control_points =
             Eigen::Map<MatrixX<double>>(solution.data(),
                                         dim, num_control_points);
-
         bezier_curves.emplace_back(std::make_unique<BezierCurve<double>>(
           start_time, start_time + h, control_points));
         start_time += h;

@@ -1535,7 +1535,7 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction1) {
   const Eigen::Vector2d lower_velocity_bound = Eigen::Vector2d{-0.5, -1.0};
   const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
   const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
-  const auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, 1.0, weight_matrix, velocity_bounds);
+  const auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, std::nullopt, weight_matrix, velocity_bounds);
   // The trajectory in start and goal_region would have zero time. Returning only the middle region.
   EXPECT_EQ(traj.get_number_of_segments(), 1);
   EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start, 1e-6));
@@ -1554,7 +1554,7 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction2) {
   const Eigen::Vector2d lower_velocity_bound = Eigen::Vector2d{-0.5, -1.0};
   const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
   const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
-  const auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, 1.0, weight_matrix, velocity_bounds);
+  const auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, std::vector<int>(), std::nullopt, std::nullopt, weight_matrix, velocity_bounds);
   // The trajectory in start and goal_region would have zero time. Returning a zero duration trajectory.
   EXPECT_EQ(traj.get_number_of_segments(), 0);
 }
@@ -1573,39 +1573,32 @@ GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction3) {
 }
 
 GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction4) {
-  // With wrapping continous joints.
-  Vector2d start(10 * M_PI + 0.1, 0);
-  HPolyhedron middle_region = HPolyhedron::MakeBox(Vector2d{-1.0, -1.0}, Vector2d{1.0, 1.0});
-  HPolyhedron goal_region = HPolyhedron::MakeBox(Vector2d{1.0, 1.0}, Vector2d{2.0, 2.0});
-  const auto regions_path = MakeConvexSets(Point(start), middle_region, goal_region);
-  const std::vector<int> continuous_revolute_joints = {0};
-  const Eigen::Matrix2d weight_matrix = Eigen::MatrixXd::Identity(2, 2);
-  const Eigen::Vector2d lower_velocity_bound = Eigen::Vector2d{-0.5, -1.0};
-  const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
-  const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
-  auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, continuous_revolute_joints, 2, 1.0, weight_matrix, velocity_bounds);
-  // The trajectory in start and goal_region would have zero time. Returning only the middle region.
-  EXPECT_EQ(traj.get_number_of_segments(), 1);
-  Vector2d start_wrapped {0.1, 0};
-  EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start_wrapped, 1e-6));
-}
-
-GTEST_TEST(GcsTrajectoryOptimizationTest, SolvePathViaConvexRestriction5) {
-  // With wrapping continous joints
-  Vector2d start(0.5, -12 * M_PI + 0.1);
-  HPolyhedron middle_region = HPolyhedron::MakeBox(Vector2d{-1.0, -1.0}, Vector2d{1.0, 1.0});
-  HPolyhedron goal_region = HPolyhedron::MakeBox(Vector2d{1.0, 1.0}, Vector2d{2.0, 2.0});
-  const auto regions_path = MakeConvexSets(Point(start), middle_region, goal_region);
+  // With wrapping continous joints and continuity constraints
+  Vector2d start(-0.5, -0.1);
+  const double shift_1 = 8 * M_PI;
+  const double shift_2 = -12 * M_PI;
+  HPolyhedron middle_region_1 = HPolyhedron::MakeBox(Vector2d{-1.0, -1.0 + shift_1}, Vector2d{0.0, shift_1});
+  HPolyhedron middle_region_2 = HPolyhedron::MakeBox(Vector2d{0, shift_2}, Vector2d{1.0, 1.0 + shift_2});
+  Vector2d goal(0.1, 0.5);
+  const auto regions_path = MakeConvexSets(Point(start), middle_region_1, middle_region_2, Point(goal));
   const std::vector<int> continuous_revolute_joints = {1};
   const Eigen::Matrix2d weight_matrix = Eigen::MatrixXd::Identity(2, 2);
   const Eigen::Vector2d lower_velocity_bound = Eigen::Vector2d{-0.5, -1.0};
   const Eigen::Vector2d upper_velocity_bound = Eigen::Vector2d{0.5, 1.0};
   const auto velocity_bounds = std::make_pair(lower_velocity_bound, upper_velocity_bound);
-  auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 1, continuous_revolute_joints, 2, 1.0, weight_matrix, velocity_bounds);
-  // The trajectory in start and goal_region would have zero time. Returning only the middle region.
-  EXPECT_EQ(traj.get_number_of_segments(), 1);
-  Vector2d start_wrapped {0.5, 0.1};
-  EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start_wrapped, 1e-6));
+  auto traj = GcsTrajectoryOptimization::SolvePathViaConvexRestriction(regions_path, 2, continuous_revolute_joints, 1, 1.0, weight_matrix, velocity_bounds);
+  // The trajectory has to start from start and end at goal. Will have 2 segments.
+  // The middle point is 0.0, 0.0, the wraparound point. It will be the first point of the second segment.
+  EXPECT_EQ(traj.get_number_of_segments(), 2);
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.start_time()), start + Vector2d{0, shift_1}, 1e-6));
+  EXPECT_TRUE(CompareMatrices(traj.value(traj.end_time()), goal + Vector2d{0, shift_2}, 1e-6));
+  const double first_region_time = traj.get_segment_times()[1];
+  const double second_region_time = traj.get_segment_times()[2] - traj.get_segment_times()[1];
+  const double eps = 1e-8;
+  EXPECT_TRUE(CompareMatrices(traj.value(first_region_time - eps), Vector2d{0.0, shift_1}, 1e-6));
+  EXPECT_TRUE(CompareMatrices(traj.value(first_region_time + eps), Vector2d{0.0, shift_2}, 1e-6));
+  // The trajectory is continous at middle_time.
+  EXPECT_TRUE(CompareMatrices(traj.EvalDerivative(first_region_time - eps, 1) * first_region_time, traj.EvalDerivative(first_region_time + eps, 1) * second_region_time, 1e-6));
 }
 
 }  // namespace
