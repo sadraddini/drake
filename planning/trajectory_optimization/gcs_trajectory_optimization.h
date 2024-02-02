@@ -499,11 +499,15 @@ class GcsTrajectoryOptimization final {
       const Subgraph& source, const Subgraph& target,
       const geometry::optimization::GraphOfConvexSetsOptions& options = {});
 
-  /** Returns the sequence of regions from a mathematical program result that is typically obtained from SolvePath(). 
- 
- @param include_ends determines whether the start region (belonging to source) and end region (belonging to target) are included in the returned sequence. */
-  geometry::optimization::ConvexSets GetRegionsPath(const Subgraph& source, const Subgraph& target, const solvers::MathematicalProgramResult& result, const double tolerance = 1e-3, bool include_ends = true) const; 
+  /** Returns the sequence of regions from a mathematical program result that is
+ typically obtained from SolvePath().
 
+ @param include_ends determines whether the start region (belonging to source)
+ and end region (belonging to target) are included in the returned sequence. */
+  geometry::optimization::ConvexSets GetRegionsPath(
+      const Subgraph& source, const Subgraph& target,
+      const solvers::MathematicalProgramResult& result,
+      const double tolerance = 1e-3, bool include_ends = true) const;
 
   /** Provide a heuristic estimate of the complexity of the underlying
   GCS mathematical program, for regression testing purposes.
@@ -530,15 +534,66 @@ class GcsTrajectoryOptimization final {
   static trajectories::CompositeTrajectory<double> NormalizeSegmentTimes(
       const trajectories::CompositeTrajectory<double>& trajectory);
 
-  /** Formulates and solves a motion planning problem with a single subgraph.*/
-  static trajectories::CompositeTrajectory<double> SolvePathViaConvexRestriction(
-      const geometry::optimization::ConvexSets& convex_set_sequence, const int order, 
-      std::vector< int >continuous_revolute_joints = std::vector< int >(),
+  /** Formulates and solves a path on a path graph of convex sets.
+  @see geometry::optimization::GraphOfConvexSets::SolveConvexRestriction().
+  The path essentially traverses the sequence of convex sets in the
+    order they are provided.
+  @param convex_set_sequence is the sequence of convex sets to connect.
+  @param order is the order of the Bézier curve.
+  @param continuous_revolute_joints is a list of indices corresponding to
+    continuous revolute joints. @see continuous_revolute_joints().
+  @param continuity_order is the order of the continuity constraint. @see
+  AddPathContinuityConstraints().
+    @param time_cost is the relative weight of the time cost. @see
+  AddTimeCost().
+    @param path_length_cost is the relative weight of the path length cost. @see
+  AddPathLengthCost().
+    @param velocity_bounds is the relative weight of the velocity bounds. @see
+  AddVelocityBounds().
+    @param options include all settings for solving the shortest path problem.
+  @see geometry::optimization::GraphOfConvexSetsOptions for further details.
+  @returns a CompositeTrajectory of the solution trajectory.
+
+    @throws std::exception if any two consecutive convex sets in the sequence
+    do not intersect.
+  */
+  static trajectories::CompositeTrajectory<double>
+  SolvePathViaConvexRestriction(
+      const geometry::optimization::ConvexSets& convex_set_sequence,
+      const int order,
+      std::vector<int> continuous_revolute_joints = std::vector<int>(),
       const std::optional<int> continuity_order = std::nullopt,
       const std::optional<double> time_cost = std::nullopt,
       const std::optional<Eigen::MatrixXd> path_length_cost = std::nullopt,
-      const std::optional<std::pair<Eigen::VectorXd, Eigen::VectorXd>> velocity_bounds = std::nullopt,
-      const geometry::optimization::GraphOfConvexSetsOptions& options = {}); 
+      const std::optional<std::pair<Eigen::VectorXd, Eigen::VectorXd>>
+          velocity_bounds = std::nullopt,
+      const geometry::optimization::GraphOfConvexSetsOptions& options = {});
+
+  /** Unwraps a trajectory with continuous revolute joints into a continuous
+ trajectory in the Euclidean space. The positions for the continuous revolute
+ joints are unwrapped to be continuous. This is useful to obtain a trajectory
+ that can be used to commanded to a robot with continuous revolute joints.
+ @param gcs_trajectory The trajectory to unwrap.
+ @param continuous_revolute_joints The indices of the continuous revolute
+ joints.
+ @param starting_rounds A vector of integers that sets the starting rounds for
+ each continuous revolute joint. Given integer k, the initial position of the
+ corresponding joint will be unwrapped into [2kπ, 2(k+1)π). If the starting
+ rounds are not set, the unwrapping will start from the initial position of the
+ trajectory, so the initial position of the @p trajectory will not change.
+
+ @returns a CompositeTrajectory of the unwrapped trajectory.
+
+ @throws std::exception if
+ starting_rounds.size()!=continuous_revolute_joints.size().
+ @throws std::exception if the gcs_trajectory is not continous on the manifold
+ defined by the continuous_revolute_joints, i.e., the shift between two
+ consecutive segments is not an integer multiple of 2π.
+  */
+  static trajectories::CompositeTrajectory<double> UnWrapToContinousTrajectory(
+      const trajectories::CompositeTrajectory<double>& gcs_trajectory,
+      std::vector<int> continuous_revolute_joints,
+      std::optional<std::vector<int>> starting_rounds = std::nullopt);
 
  private:
   const int num_positions_;
