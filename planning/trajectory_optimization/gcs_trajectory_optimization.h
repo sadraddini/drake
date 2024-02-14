@@ -501,7 +501,13 @@ class GcsTrajectoryOptimization final {
 
   /** Returns the sequence of regions from a mathematical program result that is
  typically obtained from SolvePath().
-
+ 
+  @param source specifies the source subgraph. Must have been created from a
+  call to AddRegions() on this object, not some other optimization program.
+  @param target specifies the target subgraph. Must have been created from a
+  call to AddRegions() on this object, not some other optimization program.
+ @param tolerance is the tolerance used to determine to select the edges from
+ the flow solution resuts that are considered to be part of the path.
  @param include_ends determines whether the start region (belonging to source)
  and end region (belonging to target) are included in the returned sequence. */
   geometry::optimization::ConvexSets GetRegionsPath(
