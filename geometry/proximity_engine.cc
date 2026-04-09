@@ -86,47 +86,6 @@ struct ConvexHullCacheEntry {
 class MapStringToConvexHullCache
     : public string_unordered_map<ConvexHullCacheEntry> {};
 
-// Helper function that creates a copy of the given collision object.
-// The underlying FCL collision geometry is shared with the clone rather than
-// deep-copied; FCL geometry objects are ostensibly immutable after
-// construction; the shared geometry object should not change during cloning.
-// However, in practice, there is an hidden mutation in this operation.
-// The mutex reference passed in provides protection against the transient
-// effects of that mutation.
-unique_ptr<CollisionObjectd> CopyFclObjectOrThrow(
-    const CollisionObjectd& object_source, std::mutex* mutex) {
-  shared_ptr<fcl::CollisionGeometryd> shared_geom =
-      std::const_pointer_cast<fcl::CollisionGeometryd>(
-          object_source.collisionGeometry());
-
-  // If a geometry was declared with a non-zero margin value, it has the effect
-  // of inflating the fcl geometry's _local_ bounding box. However, the
-  // CollisionObject's constructor inexplicably calls the geometry's
-  // updateLocalAABB() (which erases the margin inflation). Therefore, to share
-  // the geometry *and* preserve the effects of margin inflation we:
-  //  a) read the geometry's local AABB values,
-  //  b) create the collision objects (maybe temporarily resetting the AABB),
-  //  c) write the results back.
-  // All under the protection of the provided mutex.
-  std::lock_guard<std::mutex> lock(*mutex);
-
-  const Vector3d local_aabb_min = shared_geom->aabb_local.min_;
-  const Vector3d local_aabb_max = shared_geom->aabb_local.max_;
-  const double aabb_radius = shared_geom->aabb_radius;
-
-  auto object_copy = make_unique<CollisionObjectd>(shared_geom);
-
-  shared_geom->aabb_local.min_ = local_aabb_min;
-  shared_geom->aabb_local.max_ = local_aabb_max;
-  shared_geom->aabb_radius = aabb_radius;
-
-  object_copy->setUserData(object_source.getUserData());
-  object_copy->setTransform(object_source.getTransform());
-  object_copy->computeAABB();
-
-  return object_copy;
-}
-
 // Helper function that creates a deep copy of a vector of collision objects.
 // Assumes the input vector has already been cleared. The `copy_map` parameter
 // serves as a mapping from each source object to its corresponding copy. Used
@@ -136,13 +95,13 @@ void CopyFclObjectsOrThrow(
     const unordered_map<GeometryId, unique_ptr<CollisionObjectd>>&
         source_objects,
     unordered_map<GeometryId, unique_ptr<CollisionObjectd>>* target_objects,
-    std::unordered_map<const CollisionObjectd*, CollisionObjectd*>* copy_map,
-    std::mutex* mutex) {
+    std::unordered_map<const CollisionObjectd*, CollisionObjectd*>* copy_map) {
   DRAKE_ASSERT(target_objects->size() == 0);
   for (const auto& source_id_object_pair : source_objects) {
     const GeometryId source_id = source_id_object_pair.first;
     const CollisionObjectd& source_object = *source_id_object_pair.second;
-    (*target_objects)[source_id] = CopyFclObjectOrThrow(source_object, mutex);
+    (*target_objects)[source_id] =
+        make_unique<fcl::CollisionObjectd>(source_object);
     copy_map->insert({&source_object, (*target_objects)[source_id].get()});
   }
 }
@@ -263,7 +222,6 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
   Impl() = default;
 
   Impl(const Impl& other) : ShapeReifier(other) {
-    copy_mutex_ = other.copy_mutex_;
     hydroelastic_geometries_ = other.hydroelastic_geometries_;
     geometries_for_deformable_contact_ =
         other.geometries_for_deformable_contact_;
@@ -278,9 +236,9 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     // Copy all of the geometry.
     std::unordered_map<const CollisionObjectd*, CollisionObjectd*> object_map;
     CopyFclObjectsOrThrow(other.anchored_objects_, &anchored_objects_,
-                          &object_map, copy_mutex_.get());
+                          &object_map);
     CopyFclObjectsOrThrow(other.dynamic_objects_, &dynamic_objects_,
-                          &object_map, copy_mutex_.get());
+                          &object_map);
 
     // Build new AABB trees from the input AABB trees.
     BuildTreeFromReference(other.dynamic_tree_, object_map, &dynamic_tree_);
@@ -305,11 +263,10 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     // Copy all of the geometry.
     std::unordered_map<const CollisionObjectd*, CollisionObjectd*> object_map;
     CopyFclObjectsOrThrow(anchored_objects_, &engine->anchored_objects_,
-                          &object_map, copy_mutex_.get());
+                          &object_map);
     CopyFclObjectsOrThrow(dynamic_objects_, &engine->dynamic_objects_,
-                          &object_map, copy_mutex_.get());
+                          &object_map);
 
-    engine->copy_mutex_ = this->copy_mutex_;
     engine->collision_filter_ = this->collision_filter_;
 
     // Build new AABB trees from the input AABB trees.
@@ -1100,10 +1057,7 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
     DRAKE_DEMAND(object != nullptr);
 
     // To edit the assigned collision geometry, we have to cheat and temporarily
-    // ignore the const-ness. Note: this assumes that the collision object
-    // hasn't been added to a BVH yet; as long as this is part of the
-    // reification process, that will remain true. The collision object only
-    // gets added when reification is complete.
+    // ignore the const-ness.
     auto* g =
         const_cast<fcl::CollisionGeometryd*>(object->collisionGeometry().get());
     DRAKE_DEMAND(g != nullptr);
@@ -1372,14 +1326,6 @@ class ProximityEngine<T>::Impl : public ShapeReifier {
 
   // The mechanism for dictating collision filtering.
   CollisionFilter collision_filter_;
-
-  // Forces serialization of CopyFclObjectOrThrow(). (See that function for
-  // details.)
-  // Stored as a shared_ptr so that every clone of a given ProximityEngine
-  // shares the same mutex instance: clones share the same underlying FCL
-  // geometry objects, so concurrent copies of any two engines derived from the
-  // same original must be serialized by the same mutex.
-  std::shared_ptr<std::mutex> copy_mutex_{std::make_shared<std::mutex>()};
 
   // The tolerance that determines when the iterative process would terminate.
   // @see ProximityEngine::set_distance_tolerance() for more details.
