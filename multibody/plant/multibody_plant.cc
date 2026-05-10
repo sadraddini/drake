@@ -1288,8 +1288,10 @@ void MultibodyPlant<T>::RegisterRigidBodyWithSceneGraph(
 }
 
 template <typename T>
-MatrixX<T> MultibodyPlant<T>::CalcHessianOfPotentialEnergy(const systems::Context<T>& context) const{
-  // Let's make the matrix of n*n where n is the number of generalized coordinates.
+MatrixX<T> MultibodyPlant<T>::CalcHessianOfPotentialEnergy(
+    const systems::Context<T>& context) const {
+  // Let's make the matrix of n*n where n is the number of generalized
+  // coordinates.
   int n = num_positions();
   MatrixX<T> hessian(n, n);
   // We will use CalcBiasCenterOfMassTranslationalAcceleration
@@ -1301,24 +1303,29 @@ MatrixX<T> MultibodyPlant<T>::CalcHessianOfPotentialEnergy(const systems::Contex
   const T total_mass = CalcTotalMass(context);
   for (int i = 0; i < n; ++i) {
     SetVelocities(context_copy.get(), VectorX<T>::Unit(n, i));
-    auto bias_acc = CalcBiasCenterOfMassTranslationalAcceleration(*context_copy, wrt, frame_world, frame_world);
-    // Dot product of bias acceleration with gravity vector gives us the second derivative of potential energy with respect to the i-th generalized coordinate.
+    auto bias_acc = CalcBiasCenterOfMassTranslationalAcceleration(
+        *context_copy, wrt, frame_world, frame_world);
+    // Dot product of bias acceleration with gravity vector gives us the second
+    // derivative of potential energy with respect to the i-th generalized
+    // coordinate.
     bias_diagonal(i) = bias_acc.dot(gravity_vector) * total_mass;
     hessian(i, i) = bias_diagonal(i);
   }
   // Now let's do the off-dioagonal terms.
   for (int i = 0; i < n; ++i) {
     for (int j = i + 1; j < n; ++j) {
-      SetVelocities(context_copy.get(), VectorX<T>::Unit(n, i) + VectorX<T>::Unit(n, j));
-      auto bias_acc = CalcBiasCenterOfMassTranslationalAcceleration(*context_copy, wrt, frame_world, frame_world);
+      SetVelocities(context_copy.get(),
+                    VectorX<T>::Unit(n, i) + VectorX<T>::Unit(n, j));
+      auto bias_acc = CalcBiasCenterOfMassTranslationalAcceleration(
+          *context_copy, wrt, frame_world, frame_world);
       T off_diagonal = bias_acc.dot(gravity_vector) * total_mass;
-      hessian(i, j) = (off_diagonal - bias_diagonal(i) - bias_diagonal(j)) / 2.0;
+      hessian(i, j) =
+          (off_diagonal - bias_diagonal(i) - bias_diagonal(j)) / 2.0;
       hessian(j, i) = hessian(i, j);  // Symmetric matrix
     }
   }
   return hessian;
 }
-
 
 template <typename T>
 void MultibodyPlant<T>::SetFloatingBaseBodyPoseInWorldFrame(

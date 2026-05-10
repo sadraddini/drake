@@ -519,52 +519,57 @@ TEST_F(TwoDOFPlanarPendulumTest, CalcHessianOfPotentialEnergy) {
   // the gravity is in z-direction, and the mechanism is planar in the xy-plane.
   const MatrixXd H = plant_.CalcHessianOfPotentialEnergy(*context_);
   EXPECT_TRUE(CompareMatrices(H, MatrixXd::Zero(2, 2), kTolerance));
-    double V_zero = plant_.CalcPotentialEnergy(*context_);
-std::cout << "Potential energy with gravity in z: " << V_zero << std::endl;
-EXPECT_TRUE(std::abs(V_zero) < kTolerance);
+  double V_zero = plant_.CalcPotentialEnergy(*context_);
+  std::cout << "Potential energy with gravity in z: " << V_zero << std::endl;
+  EXPECT_TRUE(std::abs(V_zero) < kTolerance);
   // Now, let's add gravity.
-    plant_.mutable_gravity_field().set_gravity_vector(Vector3d(-9.81, 0, 0));
-    const MatrixXd H_with_gravity = plant_.CalcHessianOfPotentialEnergy(*context_);
-    // log the value of the Hessian for debugging purposes.
-    std::cout << "Hessian of potential energy with gravity:" << std::endl;
-    for (int i = 0; i < H_with_gravity.rows(); ++i) {
-        for (int j = 0; j < H_with_gravity.cols(); ++j) {
-            std::cout << H_with_gravity(i, j) << " ";
-        }
-        std::cout << std::endl;
+  plant_.mutable_gravity_field().set_gravity_vector(Vector3d(-9.81, 0, 0));
+  const MatrixXd H_with_gravity =
+      plant_.CalcHessianOfPotentialEnergy(*context_);
+  // log the value of the Hessian for debugging purposes.
+  std::cout << "Hessian of potential energy with gravity:" << std::endl;
+  for (int i = 0; i < H_with_gravity.rows(); ++i) {
+    for (int j = 0; j < H_with_gravity.cols(); ++j) {
+      std::cout << H_with_gravity(i, j) << " ";
     }
-    // Verify that the Hessian of potential energy is not zero when gravity is present.
-    EXPECT_FALSE(CompareMatrices(H_with_gravity, MatrixXd::Zero(2, 2), kTolerance));
-    // Now let's compare this with finite difference approximation of the Hessian.
-    const double epsilon = 1e-5;
-    int n = plant_.num_positions();
-    MatrixXd H_fd = MatrixXd::Zero(n, n);
-    // We need to compute the gradient of CalcGravityGeneralizedForces
-    const auto q_original = plant_.GetPositions(*context_);
-    for (int i = 0; i < n; ++i) {
-        // Perturb the i-th and j-th positions by epsilon.
-        Eigen::VectorXd q_plus = q_original;
-        Eigen::VectorXd q_minus = q_original;
-        q_plus(i) += epsilon;
-        q_minus(i) -= epsilon;
-        // Set the perturbed positions in the context.
-        plant_.SetPositions(context_.get(), q_plus);
-        Eigen::VectorXd g_plus = plant_.CalcGravityGeneralizedForces(*context_);
-        // Let's also compute CalcPotentialEnergy for the gravity
-        plant_.SetPositions(context_.get(), q_minus);
-        Eigen::VectorXd g_minus = plant_.CalcGravityGeneralizedForces(*context_);
-        // Compute the finite difference approximation of the Hessian.
-        H_fd.col(i) = (g_plus - g_minus) / (2 * epsilon);
+    std::cout << std::endl;
+  }
+  // Verify that the Hessian of potential energy is not zero when gravity is
+  // present.
+  EXPECT_FALSE(
+      CompareMatrices(H_with_gravity, MatrixXd::Zero(2, 2), kTolerance));
+  // Now let's compare this with finite difference approximation of the Hessian.
+  const double epsilon = 1e-5;
+  int n = plant_.num_positions();
+  MatrixXd H_fd = MatrixXd::Zero(n, n);
+  // We need to compute the gradient of CalcGravityGeneralizedForces
+  const auto q_original = plant_.GetPositions(*context_);
+  for (int i = 0; i < n; ++i) {
+    // Perturb the i-th and j-th positions by epsilon.
+    Eigen::VectorXd q_plus = q_original;
+    Eigen::VectorXd q_minus = q_original;
+    q_plus(i) += epsilon;
+    q_minus(i) -= epsilon;
+    // Set the perturbed positions in the context.
+    plant_.SetPositions(context_.get(), q_plus);
+    Eigen::VectorXd g_plus = plant_.CalcGravityGeneralizedForces(*context_);
+    // Let's also compute CalcPotentialEnergy for the gravity
+    plant_.SetPositions(context_.get(), q_minus);
+    Eigen::VectorXd g_minus = plant_.CalcGravityGeneralizedForces(*context_);
+    // Compute the finite difference approximation of the Hessian.
+    H_fd.col(i) = (g_plus - g_minus) / (2 * epsilon);
+  }
+  // Print the finite difference Hessian for debugging purposes.
+  std::cout << "Finite difference Hessian of potential energy with gravity:"
+            << std::endl;
+  for (int i = 0; i < H_fd.rows(); ++i) {
+    for (int j = 0; j < H_fd.cols(); ++j) {
+      std::cout << H_fd(i, j) << " ";
     }
-    // Print the finite difference Hessian for debugging purposes.
-    std::cout << "Finite difference Hessian of potential energy with gravity:" << std::endl;
-    for (int i = 0; i < H_fd.rows(); ++i) {
-        for (int j = 0; j < H_fd.cols(); ++j) {
-            std::cout << H_fd(i, j) << " ";
-        }        std::cout << std::endl;
-    }
-    // Compare the finite difference Hessian with the analytical Hessian.
-    EXPECT_TRUE(CompareMatrices(H_with_gravity, H_fd, 2e-3));
+    std::cout << std::endl;
+  }
+  // Compare the finite difference Hessian with the analytical Hessian.
+  EXPECT_TRUE(CompareMatrices(H_with_gravity, H_fd, 2e-3));
 }
 
 }  // namespace

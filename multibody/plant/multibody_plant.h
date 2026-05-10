@@ -5114,7 +5114,8 @@ class MultibodyPlant final : public internal::MultibodyTreeSystem<T> {
         context, with_respect_to, frame_A, frame_E);
   }
 
-  MatrixX<T> CalcHessianOfPotentialEnergy(const systems::Context<T>& context) const;
+  MatrixX<T> CalcHessianOfPotentialEnergy(
+      const systems::Context<T>& context) const;
 
   /// For the system S containing the selected model instances, calculates
   /// a𝑠Bias_AScm_E, Scm's translational acceleration bias in frame A with
