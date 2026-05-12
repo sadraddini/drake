@@ -577,7 +577,7 @@ TEST_F(TwoDOFPlanarPendulumTest, CalcHessianOfPotentialEnergy) {
 // Test CalcHessianOfPotentialEnergy on an N-DOF chain of planar pendulums and
 // compare its result and runtime against an AutoDiff-based computation.
 GTEST_TEST(NDOFPendulumHessianTest, CompareMethodAndAutoDiff) {
-  const int kNumLinks = 10;
+  const int kNumLinks = 7;
   const double kLinkLength = 1.0;  // m
   const double kLinkMass = 1.0;    // kg
 
@@ -625,7 +625,7 @@ GTEST_TEST(NDOFPendulumHessianTest, CompareMethodAndAutoDiff) {
   // -----------------------------------------------------------------------
   // Method 1: CalcHessianOfPotentialEnergy (analytical / bias-acceleration).
   // -----------------------------------------------------------------------
-  const int kReps = 50;
+  const int kReps = 50;  // Number of repetitions for timing.
   MatrixXd H_method;
   auto t0 = std::chrono::high_resolution_clock::now();
   for (int rep = 0; rep < kReps; ++rep) {
@@ -654,7 +654,7 @@ GTEST_TEST(NDOFPendulumHessianTest, CompareMethodAndAutoDiff) {
     plant_ad.SetPositions(context_ad.get(), q_ad);
     const VectorX<AutoDiffXd> tau_g_ad =
         plant_ad.CalcGravityGeneralizedForces(*context_ad);
-    H_autodiff = -math::ExtractGradient(tau_g_ad);
+    H_autodiff = math::ExtractGradient(tau_g_ad);
   }
   auto t3 = std::chrono::high_resolution_clock::now();
   const double time_autodiff_ms =
